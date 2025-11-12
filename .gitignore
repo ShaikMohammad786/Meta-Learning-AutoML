@@ -2,3 +2,4 @@
 processed_datasets/
 *.vscode
 *.csv
+__pycache__/
