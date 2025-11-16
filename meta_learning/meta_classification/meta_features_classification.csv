@@ -1,2 +1,0 @@
-n_instances,n_features,n_num_features,n_cat_features,missing_values_pct,class_entropy,n_classes,mean_skewness,mean_kurtosis,avg_correlation,max_correlation,mean_mutual_info,max_mutual_info,pca_fraction_95,feature_to_instance_ratio,task_type,best_model
-100,9,9,0,0.0,0.9999999999971146,2,-0.1276618033147078,-0.1754864846684044,0.2237273210176691,0.8166821230365264,0.0764225964740203,0.211078247242427,0.6666666666666666,0.09,Classification,KNN
