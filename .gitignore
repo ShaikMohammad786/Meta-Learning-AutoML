@@ -11,3 +11,4 @@ download_datasets.py
 *.txt 
 *.pkl
 storage/
+.env
