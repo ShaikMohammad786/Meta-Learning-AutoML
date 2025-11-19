@@ -5,3 +5,8 @@ ipykernel
 imbalanced-learn
 xgboost
 lime
+fastapi[all]
+pymongo
+bcrypt
+passlib
+python-jose[cryptography]
