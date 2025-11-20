@@ -492,25 +492,6 @@ If you want to extend the project with tests:
 
 You can customize these to match your environment (local vs server).
 
----
-
-## 🚢 Deployment
-
-### Backend
-
-1. Build a Docker image:
-
-   ```bash
-   docker build -t meta-learning-automl-backend .
-   ```
-
-2. Run container:
-
-   ```bash
-   docker run -p 8000:8000 meta-learning-automl-backend
-   ```
-
-3. Configure domain/HTTPS using reverse proxies like Nginx or Traefik.
 
 ### Frontend
 
@@ -533,57 +514,7 @@ You can customize these to match your environment (local vs server).
   - Spins up frontend container (or a simple nginx serving the built files).
   - Optionally attaches volumes for storing datasets/model bundles.
 
----
 
-## 🧭 Roadmap / Future Ideas
-
-Some natural extensions:
-
-- Add **regression** support alongside classification.
-- Add more base algorithms (LightGBM, CatBoost, TabNet).
-- Add support for:
-  - Time-series forecasting.
-  - Multi-label classification.
-- Smarter search strategies:
-  - Bayesian optimization.
-  - Multi-fidelity hyperparameter search.
-- Better monitoring:
-  - Integration with Prometheus/Grafana.
-- Auto-documentation:
-  - Generate model cards describing each trained model.
-
----
-
-## 🙌 Contributing
-
-Contributions, suggestions, and feedback are welcome!
-
-1. Fork the repo.
-2. Create a feature branch:
-
-   ```bash
-   git checkout -b feature/my-awesome-change
-   ```
-
-3. Commit your changes:
-
-   ```bash
-   git commit -m "Add awesome change"
-   ```
-
-4. Push and open a Pull Request:
-
-   ```bash
-   git push origin feature/my-awesome-change
-   ```
-
-Please try to:
-
-- Add or update docstrings.
-- Keep code style consistent (e.g., `black` + `isort` for Python, ESLint/Prettier for JS).
-- Add small tests if you modify core logic.
-
----
 
 ## 📜 License
 
