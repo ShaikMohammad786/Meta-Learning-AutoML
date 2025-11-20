@@ -41,6 +41,13 @@ class Preproccessor:
         self.pca = None
         self.scaler = None
         self.task_type=None
+        self.dropped_bad_columns = []
+        self.imputation_values = {}
+        self.pre_encoding_columns = None
+        self.columns_after_encoding = None
+        self.scale_cols = []
+        self.high_corr_drop_cols = []
+        self.final_feature_columns = None
 
     def check_task(self):
         
@@ -75,6 +82,7 @@ class Preproccessor:
 
         # Avoid dropping target
         to_drop = [c for c in (null_cols + constant_cols) if c != self.target_col]
+        self.dropped_bad_columns = to_drop
 
         print(f"[ DROP ] Dropping cols {to_drop}")
         
@@ -236,6 +244,7 @@ class Preproccessor:
             mode_vals = X_train[col].mode()
             if not mode_vals.empty:
                 mode_val = mode_vals.iloc[0]
+                self.imputation_values[col] = {"strategy": "mode", "value": mode_val}
                 X_train[col] = X_train[col].fillna(mode_val)
                 if X_test is not None:
                     X_test[col] = X_test[col].fillna(mode_val)
@@ -249,6 +258,7 @@ class Preproccessor:
         # 3️⃣ Continuous numeric imputation (mean)
         for col in continuous_cols:
             mean_val = X_train[col].mean()
+            self.imputation_values[col] = {"strategy": "mean", "value": mean_val}
             X_train[col] = X_train[col].fillna(mean_val)
             if X_test is not None:
                 X_test[col] = X_test[col].fillna(mean_val)
@@ -259,6 +269,7 @@ class Preproccessor:
         # 4️⃣ Discrete numeric imputation (simple fill instead of KNN)
         for col in discrete_cols:
             fill_val = X_train[col].median()  # median handles skewed data better
+            self.imputation_values[col] = {"strategy": "median", "value": fill_val}
             X_train[col] = X_train[col].fillna(fill_val)
             if X_val is not None:
                 X_val[col] = X_val[col].fillna(fill_val)
@@ -278,9 +289,12 @@ class Preproccessor:
                 for col in nan_cols:
                     if col in num_cols:
                         fill_val = X_train[col].mean()
+                        strategy = "mean"
                     else:
                         mode_vals = X_train[col].mode()
                         fill_val = mode_vals.iloc[0] if not mode_vals.empty else 0
+                        strategy = "mode"
+                    self.imputation_values[col] = {"strategy": strategy, "value": fill_val}
                     df[col] = df[col].fillna(fill_val)
 
         if fallback_counts:
@@ -455,6 +469,7 @@ class Preproccessor:
 
         self.X_train, self.X_val, self.X_test = X_train, X_val, X_test
         self.encoders = encoders
+        self.columns_after_encoding = list(self.X_train.columns)
         print(" Encoding complete.")
         return self
 
@@ -485,6 +500,7 @@ class Preproccessor:
             X_val[scale_cols] = scaler.transform(X_val[scale_cols])
             X_test[scale_cols] = scaler.transform(X_test[scale_cols])
             self.scaler = scaler
+            self.scale_cols = scale_cols
             print(f" Scaled {len(scale_cols)} continuous numeric columns.")
         else:
             print(" No continuous numeric columns found for scaling.")
@@ -509,6 +525,7 @@ class Preproccessor:
         to_drop = [col for col in upper.columns if any(upper[col] >= threshold)]
 
         if to_drop:
+            self.high_corr_drop_cols = to_drop
             X_train.drop(columns=to_drop, inplace=True)
             X_val.drop(columns=[c for c in to_drop if c in X_val.columns], inplace=True)
             X_test.drop(
@@ -761,6 +778,7 @@ class Preproccessor:
         # -----------------------------------------
         # 8) Categorical Encoding
         # -----------------------------------------
+        self.pre_encoding_columns = list(self.X_train.columns)
         try:
             self.universal_encoder()
         except Exception as e:
@@ -834,8 +852,150 @@ class Preproccessor:
             print(f"⚠️ Saving failed: {e}")
 
         print("[DONE] Preprocessing completed successfully.")
+        self.final_feature_columns = list(self.X_train.columns)
 
         return self.X_train, self.y_train, self.X_test, self.y_test, self.X_val, self.y_val, self.task_type
+
+    def create_inference_artifact(self):
+        if self.final_feature_columns is None:
+            raise ValueError("Preprocessor has not completed preprocessing yet.")
+
+        artifact = {
+            "target_col": self.target_col,
+            "task_type": self.task_type,
+            "dropped_bad_columns": self.dropped_bad_columns or [],
+            "pre_encoding_columns": self.pre_encoding_columns or [],
+            "columns_after_encoding": self.columns_after_encoding
+            or self.pre_encoding_columns
+            or [],
+            "imputation_values": self.imputation_values or {},
+            "encoders": getattr(self, "encoders", {}) or {},
+            "scale_cols": self.scale_cols or [],
+            "scaler": self.scaler,
+            "high_corr_drop_cols": self.high_corr_drop_cols or [],
+            "final_features": self.final_feature_columns or [],
+            "pca": self.pca,
+        }
+        return artifact
+
+    def transform_for_inference(self, data):
+        artifact = self.create_inference_artifact()
+        return self._apply_artifact_to_dataframe(data, artifact)
+
+    @staticmethod
+    def _apply_artifact_to_dataframe(data, artifact):
+        if isinstance(data, (str, os.PathLike)):
+            df = pd.read_csv(
+                data,
+                header=0,
+                na_values=NA_STRINGS,
+                keep_default_na=True,
+            )
+        elif isinstance(data, pd.DataFrame):
+            df = data.copy()
+        else:
+            raise ValueError("Data must be a path to CSV or a pandas DataFrame.")
+
+        df = df.drop_duplicates().reset_index(drop=True)
+
+        target_col = artifact.get("target_col")
+        if target_col and target_col in df.columns:
+            df = df.drop(columns=[target_col])
+
+        drop_cols = artifact.get("dropped_bad_columns") or []
+        for col in drop_cols:
+            if col in df.columns:
+                df = df.drop(columns=[col])
+
+        base_cols = artifact.get("pre_encoding_columns") or list(df.columns)
+        for col in base_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+        df = df.reindex(columns=base_cols)
+
+        impute_map = artifact.get("imputation_values") or {}
+        for col, info in impute_map.items():
+            if col not in df.columns:
+                continue
+            fill_value = info.get("value", 0)
+            df[col] = df[col].fillna(fill_value)
+
+        encoders = artifact.get("encoders") or {}
+        for col, info in encoders.items():
+            enc_type = info.get("type")
+            if enc_type == "onehot":
+                expected_cols = info.get("columns", [])
+                if col in df.columns:
+                    dummies = pd.get_dummies(
+                        df[col],
+                        prefix=col,
+                        drop_first=True,
+                    )
+                    dummies = dummies.reindex(columns=expected_cols, fill_value=0)
+                    df = pd.concat(
+                        [df.drop(columns=[col]), dummies],
+                        axis=1,
+                    )
+                else:
+                    zeros = pd.DataFrame(
+                        0,
+                        index=df.index,
+                        columns=expected_cols,
+                    )
+                    df = pd.concat([df, zeros], axis=1)
+            elif enc_type == "target":
+                mapping = info.get("mapping", {})
+                default = (
+                    float(np.mean(list(mapping.values()))) if mapping else 0.0
+                )
+                if col not in df.columns:
+                    df[col] = default
+                else:
+                    df[col] = df[col].map(mapping).fillna(default)
+            elif enc_type == "frequency":
+                mapping = info.get("mapping", {})
+                if col not in df.columns:
+                    df[col] = 0
+                else:
+                    df[col] = df[col].map(mapping).fillna(0)
+
+        encoded_cols = artifact.get("columns_after_encoding")
+        if encoded_cols:
+            for col in encoded_cols:
+                if col not in df.columns:
+                    df[col] = 0
+            df = df.reindex(columns=encoded_cols, fill_value=0)
+
+        scale_cols = artifact.get("scale_cols") or []
+        scaler = artifact.get("scaler")
+        if scaler is not None and scale_cols:
+            for col in scale_cols:
+                if col not in df.columns:
+                    df[col] = 0
+            df[scale_cols] = scaler.transform(df[scale_cols])
+
+        drop_high_corr = artifact.get("high_corr_drop_cols") or []
+        if drop_high_corr:
+            df = df.drop(
+                columns=[c for c in drop_high_corr if c in df.columns],
+                errors="ignore",
+            )
+
+        if artifact.get("pca") is not None:
+            pca = artifact["pca"]
+            transformed = pca.transform(df)
+            df = pd.DataFrame(
+                transformed,
+                columns=[f"PC{i+1}" for i in range(pca.n_components_)],
+            )
+
+        final_cols = artifact.get("final_features") or list(df.columns)
+        for col in final_cols:
+            if col not in df.columns:
+                df[col] = 0
+        df = df.reindex(columns=final_cols, fill_value=0)
+
+        return df
 
 
 

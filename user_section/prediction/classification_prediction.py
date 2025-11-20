@@ -6,7 +6,7 @@ import pandas as pd
 from joblib import load
 from components.meta_features_extraction import meta_features_extract_class
 from components.preprocessing import Preproccessor
-from lime.lime_tabular import LimeTabularExplainer
+
 import numpy as np
 from constants import *
 

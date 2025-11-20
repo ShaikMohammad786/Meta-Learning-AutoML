@@ -1,41 +1,38 @@
-import pandas as pd
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
-import os, sys
-
-sys.path.append(os.path.abspath(os.getcwd()))
+import pandas as pd
 from joblib import dump
-from sklearn.linear_model import (
-    LinearRegression,
-    Lasso,
-    Ridge,
-    ElasticNet,
-)
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.svm import SVR, LinearSVR
+from lime.lime_tabular import LimeTabularExplainer
 from sklearn.ensemble import (
-    RandomForestRegressor,
     HistGradientBoostingRegressor,
+    RandomForestRegressor,
 )
-from sklearn.metrics import (
-    r2_score,
-    mean_absolute_error,
-    root_mean_squared_error,
-)
-
-from sklearn.pipeline import Pipeline
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.metrics import r2_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
-from typing import Dict, Any, Optional, List
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.svm import LinearSVR, SVR
+from sklearn.tree import DecisionTreeRegressor
+
 from constants import *
 from user_section.prediction.regression_prediction import MetaRegressionPredictor
+from user_section.training.bundle_exporter import export_user_bundle
+from user_section.training.model_explanations import describe_model
 class UserRegressionTrainer:
     def __init__(
         self,
         predictor:MetaRegressionPredictor,
         user_id,
         tuning: bool,
-        dataset_name
+        dataset_name,
+        status_tracker=None,
     ):
         self.models_list = {
             "LinearRegression": LinearRegression(),
@@ -125,6 +122,48 @@ class UserRegressionTrainer:
         self.tuning = tuning
         self.user_id = user_id
         self.dataset_name=dataset_name
+        self.feature_names = list(self.X_train.columns)
+        self.metadata_dir = Path(f"{USERS_FOLDER}/{self.user_id}/models/regression")
+        self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        self.preprocessor = predictor.preprocessor
+        self.status_tracker = status_tracker
+
+    def _generate_lime_explanations(self, estimator):
+        try:
+            sample_frame = self.X_test if len(self.X_test) else self.X_train
+            sample = sample_frame.iloc[0].values
+            explainer = LimeTabularExplainer(
+                training_data=self.X_train.values,
+                feature_names=self.feature_names,
+                mode="regression",
+                discretize_continuous=True,
+            )
+            explanation = explainer.explain_instance(
+                data_row=sample,
+                predict_fn=estimator.predict,
+                num_features=min(8, len(self.feature_names)),
+            )
+            return [
+                {"feature": feat, "weight": float(weight)}
+                for feat, weight in explanation.as_list()
+            ]
+        except Exception as error:
+            print(f"[LIME-Regression] Failed to build explanation: {error}")
+            return []
+
+    def _persist_metadata(self, model_label, metric_value, explanations, model_reason, human_metric_text):
+        metadata = {
+            "model_name": model_label,
+            "metric_name": "test_r2",
+            "metric_value": float(metric_value),
+            "explanations": explanations,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "model_reason": model_reason,
+            "human_metric": human_metric_text,
+        }
+        meta_path = self.metadata_dir / f"{self.dataset_name}.meta.json"
+        with meta_path.open("w", encoding="utf-8") as handler:
+            json.dump(metadata, handler, indent=2)
 
     def train_and_tune_model(self):
 
@@ -205,18 +244,42 @@ class UserRegressionTrainer:
             )
 
         best_model = results[best_model_name]["model"]
+        best_metric = results[best_model_name]["metrics"]["test_r2"]
+        model_summary = describe_model("regression", best_model_name, best_metric)
 
         print(f"\n🎖 Best Model: {best_model_name}")
 
-        
         path=f"{USERS_FOLDER}/{self.user_id}/models/regression"
         os.makedirs(path, exist_ok=True)
         save_path = f"{path}/{self.dataset_name}.pkl"
         dump(best_model, save_path)
         print(f"💾 Saved Best Model → {save_path}")
 
+        explanations = self._generate_lime_explanations(best_model)
+        self._persist_metadata(
+            best_model_name,
+            best_metric,
+            explanations,
+            model_summary["explanation"],
+            model_summary["metric_text"],
+        )
+        if self.status_tracker:
+            self.status_tracker.update("packaging", "Saving model and assembling the tester bundle.")
+        bundle_path = export_user_bundle(
+            task_type="regression",
+            user_id=self.user_id,
+            dataset_name=self.dataset_name,
+            model_path=save_path,
+            preprocessor=self.preprocessor,
+        )
+
         return {
             "best_model_name": best_model_name,
             "best_model_path": save_path,
+            "bundle_path": str(bundle_path),
             "all_results": results,
+            "test_r2": best_metric,
+            "explanations": explanations,
+            "model_reason": model_summary["explanation"],
+            "human_metric": model_summary["metric_text"],
         }

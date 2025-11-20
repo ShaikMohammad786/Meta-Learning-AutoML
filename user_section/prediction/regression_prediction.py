@@ -30,6 +30,7 @@ class MetaRegressionPredictor:
             None,
             None,
         )
+        self.preprocessor = None
         
     def check_task_type(self,task_type):
         if(self.task_type !=task_type):
@@ -40,6 +41,7 @@ class MetaRegressionPredictor:
             preprocessor = Preproccessor(
                 dataframe=self.dataset_path, target_col=self.target_col
             )
+            self.preprocessor = preprocessor
             (
                 self.X_train,
                 self.y_train,
